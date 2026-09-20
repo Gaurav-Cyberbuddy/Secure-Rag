@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local data and vector database
+data/
+vector_db/
+
+# Logs
+*.log
+*.txt
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model/cache files
+.cache/
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Temporary files
+*.tmp
+*.temp
+
+backend/evaluation/results.csv

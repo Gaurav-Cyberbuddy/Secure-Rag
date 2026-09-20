@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Secure AskRAG</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="app-shell">
+
+    <!-- ================= SIDEBAR ================= -->
+
+    <aside class="sidebar">
+
+        <div class="brand">
+
+            <div class="brand-mark">
+                <span>SA</span>
+            </div>
+
+            <div>
+                <h1>Secure AskRAG</h1>
+                <p>Secure Retrieval Intelligence</p>
+            </div>
+
+        </div>
+
+
+        <div class="sidebar-divider"></div>
+
+
+        <div class="security-status">
+
+            <div class="status-dot"></div>
+
+            <div>
+                <span class="status-label">SYSTEM STATUS</span>
+                <strong>SECURE & ONLINE</strong>
+            </div>
+
+        </div>
+
+
+        <div class="sidebar-section">
+
+            <span class="section-label">
+                SECURITY PIPELINE
+            </span>
+
+            <div class="pipeline">
+
+                <div class="pipeline-step">
+                    <span class="step-number">01</span>
+                    <span>Authentication</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+                <div class="pipeline-step">
+                    <span class="step-number">02</span>
+                    <span>Authorization</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+                <div class="pipeline-step">
+                    <span class="step-number">03</span>
+                    <span>Retrieval</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+                <div class="pipeline-step">
+                    <span class="step-number">04</span>
+                    <span>Disclosure Control</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+                <div class="pipeline-step">
+                    <span class="step-number">05</span>
+                    <span>LLM Generation</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+                <div class="pipeline-step">
+                    <span class="step-number">06</span>
+                    <span>Semantic Verification</span>
+                    <span class="step-check">✓</span>
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="sidebar-footer">
+
+            <div class="footer-lock">◆</div>
+
+            <div>
+                <span>Protected Environment</span>
+                <small>Secure AskRAG v1.0</small>
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- ================= MAIN ================= -->
+
+    <main class="main-content">
+
+
+        <!-- TOP BAR -->
+
+        <header class="topbar">
+
+            <div>
+                <span class="eyebrow">
+                    SECURE DOCUMENT INTELLIGENCE
+                </span>
+
+                <h2>Ask your documents</h2>
+            </div>
+
+
+            <div
+                id="user-badge"
+                class="user-badge hidden"
+            >
+
+                <div class="user-avatar">
+                    U
+                </div>
+
+                <div>
+                    <strong id="logged-user">—</strong>
+                    <span id="logged-role">—</span>
+                </div>
+
+            </div>
+
+        </header>
+
+
+        <!-- ================= LOGIN ================= -->
+
+        <section
+            id="login-section"
+            class="login-card"
+        >
+
+            <div class="login-icon">
+                ◆
+            </div>
+
+            <div class="login-heading">
+
+                <span class="eyebrow">
+                    AUTHENTICATED ACCESS
+                </span>
+
+                <h3>Sign in to Secure AskRAG</h3>
+
+                <p>
+                    Authenticate before accessing protected
+                    document intelligence.
+                </p>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="user-id">
+                        USER ID
+                    </label>
+
+                    <input
+                        type="text"
+                        id="user-id"
+                        placeholder="Enter your user ID"
+                        autocomplete="username"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="password">
+                        PASSWORD
+                    </label>
+
+                    <input
+                        type="password"
+                        id="password"
+                        placeholder="Enter your password"
+                        autocomplete="current-password"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <button
+                id="login-btn"
+                class="primary-btn"
+            >
+                <span>Authenticate</span>
+                <span>→</span>
+            </button>
+
+
+            <div
+                id="login-message"
+                class="message"
+            ></div>
+
+        </section>
+
+
+        <!-- ================= APPLICATION ================= -->
+
+        <section
+            id="ask-section"
+            class="workspace hidden"
+        >
+
+
+            <!-- DOCUMENT PANEL -->
+
+            <div class="document-panel">
+
+                <div class="panel-heading">
+
+                    <div>
+                        <span class="eyebrow">
+                            KNOWLEDGE BASE
+                        </span>
+
+                        <h3>Documents</h3>
+                    </div>
+
+                    <span class="document-count">
+                        04
+                    </span>
+
+                </div>
+
+
+                <div class="document-list">
+
+                    <button
+                        class="document-item"
+                        data-document="paper (1).pdf"
+                    >
+
+                        <span class="document-icon">
+                            PDF
+                        </span>
+
+                        <span class="document-info">
+                            <strong>Research Paper</strong>
+                            <small>paper (1).pdf</small>
+                        </span>
+
+                        <span class="document-arrow">
+                            →
+                        </span>
+
+                    </button>
+
+
+                    <button
+                        class="document-item"
+                        data-document="Internship report.pdf.pdf"
+                    >
+
+                        <span class="document-icon">
+                            PDF
+                        </span>
+
+                        <span class="document-info">
+                            <strong>Internship Report</strong>
+                            <small>Internship report.pdf.pdf</small>
+                        </span>
+
+                        <span class="document-arrow">
+                            →
+                        </span>
+
+                    </button>
+
+
+                    <button
+                        class="document-item"
+                        data-document="S3 bucket in AWS.pdf"
+                    >
+
+                        <span class="document-icon">
+                            PDF
+                        </span>
+
+                        <span class="document-info">
+                            <strong>AWS S3 Document</strong>
+                            <small>S3 bucket in AWS.pdf</small>
+                        </span>
+
+                        <span class="document-arrow">
+                            →
+                        </span>
+
+                    </button>
+
+
+                    <button
+                        class="document-item"
+                        data-document="security_test.txt"
+                    >
+
+                        <span class="document-icon text">
+                            TXT
+                        </span>
+
+                        <span class="document-info">
+                            <strong>Security Test</strong>
+                            <small>security_test.txt</small>
+                        </span>
+
+                        <span class="document-arrow">
+                            →
+                        </span>
+
+                    </button>
+
+                </div>
+
+
+                <div class="access-card">
+
+                    <div class="access-header">
+                        <span>ACCESS CONTROL</span>
+                        <span class="shield">◆</span>
+                    </div>
+
+                    <p>
+                        Your role determines which information
+                        can be disclosed.
+                    </p>
+
+                    <div class="access-role">
+                        <span>Current role</span>
+                        <strong id="access-role">—</strong>
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- QUESTION / ANSWER -->
+
+            <div class="conversation-panel">
+
+                <div class="selected-document">
+
+                    <div class="selected-document-icon">
+                        DOC
+                    </div>
+
+                    <div>
+                        <span>SELECTED DOCUMENT</span>
+                        <strong id="selected-document">
+                            No document selected
+                        </strong>
+                    </div>
+
+                </div>
+
+
+                <div class="question-area">
+
+                    <label for="question">
+                        YOUR QUESTION
+                    </label>
+
+                    <textarea
+                        id="question"
+                        placeholder="Ask something about the selected document..."
+                        rows="5"
+                    ></textarea>
+
+
+                    <div class="question-footer">
+
+                        <span>
+                            Answers are generated only from
+                            permitted evidence.
+                        </span>
+
+                        <button
+                            id="ask-btn"
+                            class="ask-btn"
+                        >
+                            <span>Run Secure Query</span>
+                            <span>↗</span>
+                        </button>
+
+                    </div>
+
+                </div>
+
+
+                <div
+                    id="loading"
+                    class="loading hidden"
+                >
+
+                    <div class="loader"></div>
+
+                    <div>
+                        <strong>Processing securely</strong>
+                        <span>
+                            Retrieval → Disclosure → Generation → Verification
+                        </span>
+                    </div>
+
+                </div>
+
+
+                <!-- RESULT -->
+
+                <div
+                    id="result"
+                    class="result hidden"
+                >
+
+                    <div class="result-header">
+
+                        <div>
+
+                            <span class="eyebrow">
+                                SECURITY DECISION
+                            </span>
+
+                            <h3 id="decision">
+                                —
+                            </h3>
+
+                        </div>
+
+                        <div
+                            id="decision-indicator"
+                            class="decision-indicator"
+                        >
+                            —
+                        </div>
+
+                    </div>
+
+
+                    <div class="metrics">
+
+                        <div class="metric">
+
+                            <span>RISK LEVEL</span>
+
+                            <strong id="risk">
+                                —
+                            </strong>
+
+                        </div>
+
+
+                        <div class="metric">
+
+                            <span>RISK SCORE</span>
+
+                            <strong id="risk-score">
+                                —
+                            </strong>
+
+                        </div>
+
+
+                        <div class="metric">
+
+                            <span>EVIDENCE SCORE</span>
+
+                            <strong id="evidence-score">
+                                —
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="answer-block">
+
+                        <div class="block-label">
+                            ANSWER
+                        </div>
+
+                        <div
+                            id="answer"
+                            class="answer"
+                        ></div>
+
+                    </div>
+
+
+                    <div class="source-block">
+
+                        <div class="block-label">
+                            SOURCE
+                        </div>
+
+                        <div
+                            id="source"
+                            class="source"
+                        ></div>
+
+                    </div>
+
+
+                    <div class="reason-block">
+
+                        <div class="block-label">
+                            SECURITY REASON
+                        </div>
+
+                        <div
+                            id="reason"
+                            class="reason"
+                        ></div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- FOOTER -->
+
+        <footer>
+
+            <span>
+                Secure AskRAG
+            </span>
+
+            <span>
+                Retrieval • Disclosure Control • Semantic Verification
+            </span>
+
+        </footer>
+
+    </main>
+
+</div>
+
+
+<script src="app.js"></script>
+
+</body>
+</html>
