@@ -1,6 +1,9 @@
+import os
 import re
 
+from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
+from google import genai
 
 from backend.security.verification_evidence import (
     group_evidence_blocks,
@@ -8,19 +11,32 @@ from backend.security.verification_evidence import (
     normalize_words,
 )
 
+load_dotenv()
+
 
 # =========================================================
 # CONFIGURATION
 # =========================================================
 
-LLM_MODEL = "qwen2.5:3b"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+OLLAMA_MODEL = os.getenv(
+    "OLLAMA_MODEL",
+    "qwen2.5:3b",
+)
+
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-3.8-flash",
+)
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 
 FALLBACK_ANSWER = (
     "I could not find the answer in the provided document."
 )
 
-# Minimum percentage of meaningful answer words that should
-# also appear in the evidence.
 MIN_EVIDENCE_OVERLAP = 0.35
 
 
@@ -30,13 +46,49 @@ MIN_EVIDENCE_OVERLAP = 0.35
 
 def create_llm():
     """
-    Create the local LLM used by Secure AskRAG.
+    Create the configured LLM used by Secure AskRAG.
+
+    Local:
+        LLM_PROVIDER=ollama
+
+    Deployment:
+        LLM_PROVIDER=gemini
+        GEMINI_API_KEY=<your key>
     """
 
-    return OllamaLLM(
-        model=LLM_MODEL,
-        temperature=0.0,
-        num_predict=300,
+    if LLM_PROVIDER == "ollama":
+        return OllamaLLM(
+            model=OLLAMA_MODEL,
+            temperature=0.0,
+            num_predict=300,
+        )
+
+    if LLM_PROVIDER == "gemini":
+
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not configured for Gemini mode."
+            )
+
+        class GeminiLLM:
+            def __init__(self):
+                self.client = genai.Client(
+                    api_key=GEMINI_API_KEY
+                )
+
+            def invoke(self, prompt: str) -> str:
+                response = self.client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                )
+
+                return response.text or ""
+
+        return GeminiLLM()
+
+    raise ValueError(
+        f"Unsupported LLM_PROVIDER: {LLM_PROVIDER!r}. "
+        "Use 'ollama' or 'gemini'."
     )
 
 

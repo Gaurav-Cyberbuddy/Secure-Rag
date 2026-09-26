@@ -966,7 +966,7 @@ def secure_ask(
             ),
         }
 
-    # =====================================================
+        # =====================================================
     # 5. SECURITY DISCLOSURE GATE
     # =====================================================
 
@@ -975,10 +975,22 @@ def secure_ask(
         != evidence.strip()
     )
 
-    if evidence_was_redacted:
+    # -----------------------------------------------------
+    # LIMITED DISCLOSURE
+    #
+    # Sensitive fields may have been removed from the
+    # evidence. The sanitized evidence is still safe to
+    # use for answering non-sensitive questions.
+    #
+    # IMPORTANT:
+    # The original evidence is NEVER passed to the LLM
+    # when disclosure is LIMITED.
+    # -----------------------------------------------------
+
+    if disclosure.decision == "LIMITED":
 
         print(
-            "\n========== SECURITY DISCLOSURE =========="
+            "\n========== LIMITED DISCLOSURE =========="
         )
 
         print(
@@ -995,17 +1007,50 @@ def secure_ask(
         )
 
         print(
-            "Generator bypassed."
+            "Only sanitized evidence will be "
+            "provided to the generator."
         )
 
         print(
-            "Semantic verification bypassed "
-            "for the security refusal."
+            "Original restricted evidence will "
+            "NOT be sent to the LLM."
         )
 
         print(
-            "=========================================="
+            "========================================"
         )
+
+    # -----------------------------------------------------
+    # ALLOW
+    #
+    # No restricted information was removed.
+    # Normal generation can proceed.
+    # -----------------------------------------------------
+
+    elif disclosure.decision == "ALLOW":
+
+        print(
+            "\n========== DISCLOSURE ALLOWED =========="
+        )
+
+        print(
+            "No unauthorized sensitive information "
+            "was detected."
+        )
+
+        print(
+            "========================================"
+        )
+
+    # -----------------------------------------------------
+    # Defensive fallback
+    #
+    # The controller should already return DENY above.
+    # This protects the pipeline if a future disclosure
+    # state is introduced unexpectedly.
+    # -----------------------------------------------------
+
+    else:
 
         total_time = (
             time.perf_counter()
@@ -1013,8 +1058,8 @@ def secure_ask(
         )
 
         print(
-            f"[TIMING] TOTAL: "
-            f"{total_time:.2f}s"
+            "[SECURITY] Unknown disclosure state. "
+            "Failing closed."
         )
 
         return {
@@ -1024,9 +1069,8 @@ def secure_ask(
                 "under the current security policy."
             ),
             "reason": (
-                "The requested evidence contains "
-                "information restricted for the "
-                "current user's access level."
+                "Unsupported disclosure decision. "
+                "Security pipeline failed closed."
             ),
             "risk_level": disclosure.risk_level,
             "risk_score": disclosure.risk_score,
