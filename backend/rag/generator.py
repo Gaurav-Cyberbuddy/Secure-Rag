@@ -4,6 +4,7 @@ import re
 from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
 from google import genai
+from backend.security.evidence_relevance import get_model
 
 from backend.security.verification_evidence import (
     group_evidence_blocks,
@@ -39,6 +40,8 @@ FALLBACK_ANSWER = (
 
 MIN_EVIDENCE_OVERLAP = 0.35
 
+MAX_FULL_CONTEXT_CHARS = 6000
+
 
 # =========================================================
 # CREATE LLM
@@ -61,6 +64,7 @@ def create_llm():
             model=OLLAMA_MODEL,
             temperature=0.0,
             num_predict=300,
+            num_ctx=4096,
         )
 
     if LLM_PROVIDER == "gemini":
@@ -110,7 +114,10 @@ def focus_context_for_question(
     if not context.strip():
         return ""
 
-    context = normalize_document_text(context)
+        context = normalize_document_text(context)
+
+    if len(context) <= MAX_FULL_CONTEXT_CHARS:
+        return context
 
     blocks = group_evidence_blocks(context)
 
@@ -157,6 +164,23 @@ def focus_context_for_question(
             for line in lines
         )
 
+        model = get_model()
+    
+    model = get_model()
+    query_embedding = model.encode(
+        query,
+        normalize_embeddings=True,
+    )
+
+    block_embeddings = model.encode(
+        blocks,
+        normalize_embeddings=True,
+        batch_size=32,
+        show_progress_bar=False,
+    )
+
+    similarities = block_embeddings @ query_embedding
+
     scored = []
 
     for index, block in enumerate(blocks):
@@ -166,26 +190,16 @@ def focus_context_for_question(
         if not block_words:
             continue
 
-        overlap = query_words.intersection(
-            block_words
-        )
+        overlap = query_words.intersection(block_words)
 
-        score = (
-            len(overlap)
-            / max(len(query_words), 1)
-        )
+        lexical = len(overlap) / max(len(query_words), 1)
+
+        score = float(similarities[index]) + 0.25 * lexical
 
         if is_list_block(block):
             score += 0.25
 
-        if score > 0:
-            scored.append(
-                (
-                    score,
-                    index,
-                    block,
-                )
-            )
+        scored.append((score, index, block))
 
     if not scored:
         return context
@@ -291,8 +305,7 @@ GROUNDING REQUIREMENTS:
 - Preserve exact names, technologies, numbers, limits, versions,
   locations, emails, keys, and other factual values.
 - When listing items (skills, tools, technologies), copy each item exactly as written in the evidence, with its full wording. Do not shorten, complete, rename or generalize an item, and do not add any item that is not written in the evidence.
-- For a question that asks to list items, write ONE sentence in this form: "The <items> listed in the document include A, B, and C." Each item must be a short phrase (at most 6 words) copied exactly from the evidence. Do not shorten, rename or generalize an item, do not add explanations or "such as" clauses inside the list, and do not add any item that is not written in the evidence.
-- If the evidence contains multiple requested items, include ALL
+- Answer in one complete, natural sentence that begins with the subject of the question, never with a list item. If several items are requested, put all of them in that sentence, separated by commas and copied exactly as written in the evidence.- Never mention the words "evidence", "document" or "text" in your answer. State the fact directly.- If the evidence contains multiple requested items, include ALL
   requested items.
 - If the answer is a list, preserve the list items from the evidence.
 - Return ONE concise complete sentence unless the question clearly
@@ -309,11 +322,9 @@ GROUNDING REQUIREMENTS:
 - Extract the answer directly from the evidence.
 - Prefer exact phrases from the evidence over paraphrasing.
 - Use the same terminology as the document.
-- Use the same terminology as the document.
 - When listing items (skills, tools, technologies), copy each item exactly as written in the evidence, with its full wording. Do not shorten, complete, rename or generalize an item, and do not add any item that is not written in the evidence.
-- For a question that asks to list items, write ONE sentence in this form: "The <items> listed in the document include A, B, and C." Each item must be a short phrase (at most 6 words) copied exactly from the evidence. Do not shorten, rename or generalize an item, do not add explanations or "such as" clauses inside the list, and do not add any item that is not written in the evidence.
-- Make only minimal grammatical changes.
-- Make only minimal grammatical changes.
+- For a question that asks for several items, write ONE sentence that uses the word "include" followed by the items separated by commas. Copy each item exactly as written in the evidence and add nothing else.
+- Never mention the words "evidence", "document" or "text" in your answer. State the fact directly.- Make only minimal grammatical changes.
 - Do NOT rewrite technical facts into your own wording.
 - Do NOT combine separate statements into a new claim.
 - Do NOT infer information that is not explicitly present.
@@ -452,15 +463,41 @@ def clean_answer(
 
         cleaned.append(line)
 
-    return " ".join(
-        cleaned
-    ).strip()
+    result = " ".join(cleaned).strip()
 
+    result = re.sub(
+        r"(?i),?\s*\b(?:as|per)\s+(?:stated|mentioned|described|specified)\s+in\s+the\s+(?:evidence|document|text)\b",
+        "",
+        result,
+    )
+
+    result = re.sub(
+        r"(?i)^(?:according to|based on)\s+the\s+(?:evidence|document|text),?\s*",
+        "",
+        result,
+    )
+
+    return result.strip()
 
 # =========================================================
 # ANSWER VALIDATION
 # =========================================================
+_LIST_TRIGGER_RE = re.compile(r"(?i)\b(includes?|including|such as)\b")
 
+
+def has_degenerate_list(answer: str) -> bool:
+    m = _LIST_TRIGGER_RE.search(answer)
+
+    if not m:
+        return False
+
+    before = answer[:m.start()].lower()
+    after = answer[m.end():].strip(" .,:;").lower()
+
+    if not re.search(r"[a-z0-9]", after):
+        return True
+
+    return len(after) > 2 and after in before
 def is_valid_answer(
     answer: str,
 ) -> bool:
@@ -490,9 +527,10 @@ def is_valid_answer(
         for phrase in forbidden
     ):
         return False
-
-    if len(answer.split()) < 4:
-        return False
+    if re.search(r"\bA, B,? and C\b|<[^>]+>", answer):
+     return False
+    if len(answer.split()) < 2:
+     return False
 
     incomplete_endings = (
         " and",
@@ -522,7 +560,8 @@ def is_valid_answer(
         for ending in incomplete_endings
     ):
         return False
-
+    if has_degenerate_list(answer) or answer.rstrip().endswith((",", ";", ":")):
+        return False
     return True
 
 
@@ -533,6 +572,7 @@ def is_valid_answer(
 def evidence_overlap(
     answer: str,
     evidence: str,
+    query: str = "",
 ) -> float:
     """
     Calculate a simple lexical grounding score.
@@ -542,9 +582,17 @@ def evidence_overlap(
     be retried with a stronger extraction prompt.
     """
 
+    query_words = normalize_words(query)
+
     answer_words = {
         word
         for word in normalize_words(answer)
+        if len(word) > 2 and word not in query_words
+    }
+
+    evidence_words = {
+        word
+        for word in normalize_words(evidence)
         if len(word) > 2
     }
 

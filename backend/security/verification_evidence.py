@@ -630,10 +630,6 @@ def format_block_for_nli(
     return premise
 
 
-# =========================================================
-# SCORE BLOCK FOR CLAIM
-# =========================================================
-
 def score_block_for_claim(
     claim: str,
     block: str,
@@ -641,36 +637,61 @@ def score_block_for_claim(
     """
     Lexical relevance of a block to a claim.
 
-    This is used for evidence selection only.
+    Used ONLY for evidence selection.
     It does NOT approve the claim.
+
+    Specific terms from the claim receive much higher weight
+    than generic words.
     """
 
-    claim_words = normalize_words(
-        claim
-    )
+    claim_words = normalize_words(claim)
+    block_words = normalize_words(block)
 
-    block_words = normalize_words(
-        block
-    )
-
-    if (
-        not claim_words
-        or not block_words
-    ):
+    if not claim_words or not block_words:
         return 0.0
 
-    overlap = (
-        claim_words.intersection(
-            block_words
-        )
+    # Generic words should not dominate evidence selection.
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were",
+        "in", "on", "of", "to", "for", "and", "or",
+        "as", "by", "with", "from", "this", "that",
+        "these", "those", "what", "which", "who",
+        "does", "do", "did", "used", "use",
+        "listed", "list", "document", "mentioned",
+        "include", "includes", "including",
+        "technologies", "technology", "tools", "tool",
+    }
+
+    meaningful_claim_words = {
+        word for word in claim_words
+        if word not in stop_words and len(word) > 1
+    }
+
+    # If filtering removed everything, fall back to normal overlap.
+    if not meaningful_claim_words:
+        meaningful_claim_words = claim_words
+
+    direct_matches = meaningful_claim_words.intersection(block_words)
+
+    # Strongly prioritize evidence containing the actual
+    # distinctive terms from the claim.
+    score = (
+        len(direct_matches) / len(meaningful_claim_words)
     )
 
-    return (
-        len(overlap)
-        / len(claim_words)
-    )
+    # Very strong bonus when a distinctive claim term appears
+    # directly in the evidence.
+    if direct_matches:
+        score += 2.0
 
+    # Exact phrase match gets an additional strong bonus.
+    claim_text = " ".join(claim_words)
+    block_text = " ".join(block_words)
 
+    if claim_text and claim_text in block_text:
+        score += 3.0
+
+    return score
 # =========================================================
 # SELECT VERIFICATION EVIDENCE
 # =========================================================
@@ -834,25 +855,24 @@ def select_sentence_windows(claim: str, evidence: str, top_n: int = 2) -> list[s
         if i + 1 < n:
             windows.append(sentences[i] + " " + sentences[i + 1])
     return windows
-def build_nli_candidates(
+def build_nli_candidate_groups(
     claim: str,
     evidence: str,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """
-    Build ordered NLI premise candidates for a claim.
+    Returns (focused, broad) premises.
 
-    Order:
-        1. Full permitted evidence
-        2. List-preserving targeted evidence blocks
-        3. Original evidence chunks / list-aware chunk views
+    focused: targeted blocks and sentence windows
+             (can approve AND reject).
+
+    broad: whole chunks and the full evidence
+           (can approve only, for multi-hop).
     """
-
-    candidates: list[str] = []
-
+    focused: list[str] = []
+    broad: list[str] = []
     seen: set[str] = set()
 
-    def _add(text: str) -> None:
-
+    def _add(bucket: list[str], text: str) -> None:
         normalized = text.strip()
 
         if not normalized:
@@ -864,45 +884,7 @@ def build_nli_candidates(
             return
 
         seen.add(key)
-
-        candidates.append(
-            normalized
-        )
-
-    # ---------------------------------------------------------
-    # FULL PERMITTED EVIDENCE
-    # ---------------------------------------------------------
-    # Multi-hop claims may combine facts from several chunks.
-    # Give NLI the complete permitted evidence first.
-    #
-    # This does NOT bypass disclosure control: `evidence` is
-    # already the sanitized/permitted evidence supplied by the
-    # secure pipeline.
-    # ---------------------------------------------------------
-
-    repaired_full = normalize_document_text(
-        evidence
-    )
-
-    if repaired_full:
-        blocks = group_evidence_blocks(
-            repaired_full
-        )
-
-        if blocks:
-            full_evidence = "\n".join(
-                format_block_for_nli(
-                    block
-                )
-                for block in blocks
-            )
-            _add(full_evidence)
-        else:
-            _add(repaired_full)
-
-    # ---------------------------------------------------------
-    # Targeted evidence
-    # ---------------------------------------------------------
+        bucket.append(normalized)
 
     targeted = select_verification_evidence(
         claim=claim,
@@ -910,37 +892,59 @@ def build_nli_candidates(
     )
 
     if targeted:
-        _add(targeted)
-        for window in select_sentence_windows(claim, evidence):
-            _add(window)
+        _add(focused, targeted)
 
-    # ---------------------------------------------------------
-    # Original evidence chunks
-    # ---------------------------------------------------------
+        for window in select_sentence_windows(
+            claim,
+            evidence,
+        ):
+            _add(focused, window)
 
-    for chunk in split_evidence_chunks(
-        evidence
-    ):
+    for chunk in split_evidence_chunks(evidence):
+        repaired = normalize_document_text(chunk)
 
-        repaired = normalize_document_text(
-            chunk
-        )
+        _add(broad, repaired)
 
-        _add(repaired)
-
-        blocks = group_evidence_blocks(
-            repaired
-        )
+        blocks = group_evidence_blocks(repaired)
 
         if blocks:
-
-            joined = "\n".join(
-                format_block_for_nli(
-                    block
-                )
-                for block in blocks
+            _add(
+                broad,
+                "\n".join(
+                    format_block_for_nli(b)
+                    for b in blocks
+                ),
             )
 
-            _add(joined)
+    repaired_full = normalize_document_text(evidence)
 
-    return candidates
+    if repaired_full:
+        blocks = group_evidence_blocks(
+            repaired_full
+        )
+
+        _add(
+            broad,
+            (
+                "\n".join(
+                    format_block_for_nli(b)
+                    for b in blocks
+                )
+                if blocks
+                else repaired_full
+            ),
+        )
+
+    return focused, broad
+
+
+def build_nli_candidates(
+    claim: str,
+    evidence: str,
+) -> list[str]:
+    focused, broad = build_nli_candidate_groups(
+        claim,
+        evidence,
+    )
+
+    return focused + broad

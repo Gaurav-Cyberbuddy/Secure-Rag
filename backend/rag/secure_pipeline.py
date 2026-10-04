@@ -2,6 +2,10 @@ from pathlib import Path
 import re
 import sys
 import time
+_DUMP_RE = re.compile(
+    r"(?i)\b(verbatim|whole document|entire document|full document|"
+    r"dump|print everything|output everything|all contents?|raw text)\b"
+)
 
 
 # =========================================================
@@ -71,6 +75,7 @@ from backend.retrieval.retriever import (
 
 from backend.retrieval.reranker import (
     rerank_documents,
+    rerank_with_floor,
 )
 
 from backend.retrieval.vector_store import (
@@ -83,6 +88,7 @@ from backend.disclosure.controller import (
 
 from backend.rag.generator import (
     generate_answer,
+    FALLBACK_ANSWER,
 )
 
 from backend.security.semantic_evidence_check import (
@@ -94,7 +100,7 @@ from backend.security.evidence_relevance import (
 )
 
 from backend.security.verification_evidence import (
-    build_nli_candidates,
+    build_nli_candidate_groups,
 )
 
 
@@ -102,7 +108,7 @@ from backend.security.verification_evidence import (
 # CONFIGURATION
 # =========================================================
 
-TOP_K_RETRIEVAL = 10
+TOP_K_RETRIEVAL = 20
 TOP_K_RERANKED = 5
 
 EVIDENCE_THRESHOLD = 0.70
@@ -217,13 +223,10 @@ _LIST_TRIGGER_RE = re.compile(
 )
 
 
-def split_list_claim(claim: str) -> list[str]:
-    """
-    If a claim is a comma-separated enumeration introduced by a
-    trigger phrase ("include", "such as", etc.), split it into
-    one atomic claim per listed item.
-    """
+MAX_ITEM_WORDS = 10
 
+
+def split_list_claim(claim: str) -> list[str]:
     match = _LIST_TRIGGER_RE.match(claim.strip())
 
     if not match:
@@ -231,30 +234,57 @@ def split_list_claim(claim: str) -> list[str]:
 
     subject = match.group("subject").strip()
 
-    # A comma in the subject means this trigger is nested inside a longer list.
-    # Splitting here builds wrong claims, so leave the sentence whole.
     if "," in subject:
         return [claim]
 
     trigger = match.group("trigger")
-    items_text = match.group("items").strip()
 
-    raw_items = re.split(
-        r",\s*(?:and\s+)?|\s+and\s+",
-        items_text
-    )
+    items: list[str] = []
 
-    items = [
-        item.strip().rstrip(".")
-        for item in raw_items
-        if item.strip()
-    ]
+    for part in re.split(
+        r",\s*",
+        match.group("items").strip(),
+    ):
+        part = re.sub(
+            r"(?i)^and\s+",
+            "",
+            part,
+        ).strip().rstrip(".")
+
+        if not part:
+            continue
+
+        if len(part.split()) <= 4:
+            items.extend(
+                p.strip()
+                for p in re.split(
+                    r"\s+and\s+",
+                    part,
+                )
+                if p.strip()
+            )
+        else:
+            items.append(part)
 
     if len(items) < 2:
         return [claim]
 
+    subject_l = subject.lower()
+
+    for item in items:
+
+        if (
+            not re.search(
+                r"[A-Za-z0-9]",
+                item,
+            )
+            or len(item.split()) > MAX_ITEM_WORDS
+            or item.lower() in subject_l
+        ):
+            return [claim]
+
     return [
-        f"{subject} {trigger} {item}.".strip()
+        f"{subject} {trigger} {item}."
         for item in items
     ]
 def _split_clauses(sentence: str) -> list[str]:         
@@ -315,7 +345,7 @@ def split_into_claims(
             continue
 
         for clause in _split_clauses(sentence):
-            if len(clause.split()) < 4:
+            if len(clause.split()) < 2:
                 continue
             claims.extend(split_list_claim(clause))
 
@@ -326,6 +356,138 @@ def split_into_claims(
 # VERIFY ANSWER CLAIMS
 # =========================================================
 
+def _nli(checker, claim: str, premise: str):
+    r = checker.check_claim(
+        claim=claim,
+        evidence=premise,
+        threshold=EVIDENCE_THRESHOLD,
+    )
+    print(
+        f"  NLI {r.label:13} score={r.score:.4f} "
+        f"E={r.entailment_score:.4f} C={r.contradiction_score:.4f} "
+        f"N={r.neutral_score:.4f}"
+    )
+    return r
+
+
+def _is_entailed(r) -> bool:
+    return (
+        r.label == "ENTAILMENT"
+        and r.score >= EVIDENCE_THRESHOLD
+        and r.supported
+    )
+
+
+def verify_claim(claim: str, focused: list[str], broad: list[str], checker):
+    """Returns (supported, result, premise). Assumes at least one premise."""
+
+    best = None
+
+    # Focused premises may approve and may reject.
+    for premise in focused:
+        r = _nli(checker, claim, premise)
+
+        if best is None or r.score > best[0].score:
+            best = (r, premise)
+
+        # Strong entailment wins immediately.
+        if _is_entailed(r):
+            return True, r, premise
+
+        # Strong contradiction rejects.
+        if (
+            r.label == "CONTRADICTION"
+            and r.score >= EVIDENCE_THRESHOLD
+        ):
+            return False, r, premise
+
+    # Broad premises may approve, but must never reject.
+    for premise in broad:
+        r = _nli(checker, claim, premise)
+
+        if best is None or r.score > best[0].score:
+            best = (r, premise)
+
+        if _is_entailed(r):
+            return True, r, premise
+
+    return False, best[0], best[1]
+
+
+def decompose_claim(claim: str) -> list[str]:
+    """Split a multi-fact claim into self-contained parts, or return []."""
+    text = claim.strip().rstrip(".")
+
+    parts = [
+        p.strip()
+        for p in re.split(r";\s+|,\s+(?:and\s+)?", text)
+        if p.strip()
+    ]
+
+    if not (2 <= len(parts) <= 8):
+        return []
+
+    if any(len(p.split()) < 3 for p in parts):
+        return []
+
+    return [p + "." for p in parts]
+
+
+def verify_claim_with_fallback(claim: str, evidence: str, checker):
+    """Returns None if no premise can be built, else (supported, result, premise)."""
+    focused, broad = build_nli_candidate_groups(
+        claim=claim,
+        evidence=evidence,
+    )
+
+    if not focused and not broad:
+        return None
+
+    supported, result, premise = verify_claim(
+        claim,
+        focused,
+        broad,
+        checker,
+    )
+
+    if supported:
+        return True, result, premise
+
+    parts = decompose_claim(claim)
+
+    if parts:
+        print(f"  Whole claim failed; checking {len(parts)} sub-claims")
+        outcomes = []
+
+        for part in parts:
+            f2, b2 = build_nli_candidate_groups(
+                claim=part,
+                evidence=evidence,
+            )
+
+            if not f2 and not b2:
+                break
+
+            ok, r2, p2 = verify_claim(
+                part,
+                f2,
+                b2,
+                checker,
+            )
+
+            if not ok:
+                break
+
+            outcomes.append((r2, p2))
+        else:
+            weakest = min(outcomes, key=lambda o: o[0].score)
+            return True, weakest[0], "\n".join(
+                p for _, p in outcomes
+            )
+
+    return False, result, premise
+
+
 def verify_answer_claims(
     answer: str,
     evidence: str,
@@ -334,278 +496,97 @@ def verify_answer_claims(
     """
     Verify every generated claim against permitted evidence.
 
-    Security rules:
-
-    1. Use list-aware evidence selection.
-    2. Use semantic NLI.
-    3. Only ENTAILMENT above threshold is accepted.
-    4. NEUTRAL is rejected.
-    5. CONTRADICTION is rejected.
-    6. Lexical similarity never approves a claim.
+    Focused premises may approve or reject. Broad premises may
+    approve but cannot reject solely because of contradiction.
+    Failed multi-fact claims are decomposed and every part must pass.
     """
 
-    claims = split_into_claims(
-        answer
-    )
+    claims = split_into_claims(answer)
 
     if not claims:
-
         return {
             "supported": False,
-            "reason": (
-                "Generated answer contains "
-                "no meaningful claims."
-            ),
+            "reason": "Generated answer contains no meaningful claims.",
             "claims": [],
         }
 
     if not evidence.strip():
-
         return {
             "supported": False,
-            "reason": (
-                "No permitted evidence is available."
-            ),
+            "reason": "No permitted evidence is available.",
             "claims": [],
         }
 
     verified_claims: list[dict] = []
 
     for claim in claims:
+        print("\n----------------------------------------")
+        print(f"Verifying claim: {claim}")
 
-        print(
-            "\n----------------------------------------"
+        outcome = verify_claim_with_fallback(
+            claim,
+            evidence,
+            checker,
         )
 
-        print(
-            f"Verifying claim: {claim}"
-        )
-
-        # -------------------------------------------------
-        # Build targeted evidence.
-        #
-        # IMPORTANT:
-        # This preserves complete structured lists such as:
-        #
-        # Python
-        # PyTorch
-        # Torchvision
-        # Matplotlib
-        # NumPy
-        # Scikit-learn
-        #
-        # instead of selecting only one bullet.
-        # -------------------------------------------------
-
-        candidates = build_nli_candidates(
-            claim=claim,
-            evidence=evidence,
-        )
-
-        if not candidates:
-
-            verified_claims.append(
-                {
-                    "claim": claim,
-                    "supported": False,
-                    "score": 0.0,
-                    "label": "NO_EVIDENCE",
-                    "semantic_score": 0.0,
-                    "reason": (
-                        "No verification evidence "
-                        "could be constructed "
-                        "for the claim."
-                    ),
-                    "evidence": "",
-                }
-            )
-
+        if outcome is None:
+            verified_claims.append({
+                "claim": claim,
+                "supported": False,
+                "score": 0.0,
+                "label": "NO_EVIDENCE",
+                "semantic_score": 0.0,
+                "reason": "No verification evidence could be constructed for the claim.",
+                "evidence": "",
+            })
             continue
 
+        supported, r, premise = outcome
+
         if DEBUG_EVIDENCE:
+            print("\nDeciding evidence:")
+            print(premise[:1500])
 
-            print(
-                "\nTargeted verification evidence:"
-            )
-
-            print(
-                candidates[0][:1500]
-            )
-
-        best_score = 0.0
-        best_label = "NEUTRAL"
-        best_reason = (
-            "The claim was not semantically "
-            "entailed by the permitted evidence."
+        reason = (
+            r.reason
+            if (supported or r.label == "CONTRADICTION")
+            else "The claim was not semantically entailed by the permitted evidence."
         )
-        best_evidence = ""
 
-        claim_supported = False
-
-        # -------------------------------------------------
-        # NLI candidates
-        # -------------------------------------------------
-
-        for candidate in candidates:
-
-            result = checker.check_claim(
-                claim=claim,
-                evidence=candidate,
-                threshold=EVIDENCE_THRESHOLD,
-            )
-
-            print(
-                "\nNLI check:"
-            )
-
-            print(
-                f"Label: {result.label}"
-            )
-
-            print(
-                f"Score: {result.score:.4f}"
-            )
-
-            print(
-                f"Entailment: "
-                f"{result.entailment_score:.4f}"
-            )
-
-            print(
-                f"Contradiction: "
-                f"{result.contradiction_score:.4f}"
-            )
-
-            print(
-                f"Neutral: "
-                f"{result.neutral_score:.4f}"
-            )
-
-            # Keep strongest result.
-            if result.score > best_score:
-
-                best_score = result.score
-                best_label = result.label
-                best_reason = result.reason
-                best_evidence = candidate
-
-            # -------------------------------------------------
-            # Strong entailment = supported
-            # -------------------------------------------------
-
-            if (
-                result.label == "ENTAILMENT"
-                and result.score >= EVIDENCE_THRESHOLD
-                and result.supported
-            ):
-
-                claim_supported = True
-
-                best_score = result.score
-                best_label = result.label
-                best_reason = result.reason
-                best_evidence = candidate
-
-                break
-
-            # -------------------------------------------------
-            # Strong contradiction = rejected
-            # -------------------------------------------------
-
-            if (
-                result.label == "CONTRADICTION"
-                and result.score >= EVIDENCE_THRESHOLD
-            ):
-
-                claim_supported = False
-
-                best_score = result.score
-                best_label = result.label
-                best_reason = result.reason
-                best_evidence = candidate
-
-                break
-
-        # -------------------------------------------------
-        # Neutral / weak entailment
-        # -------------------------------------------------
-
-        if (
-            not claim_supported
-            and best_label != "CONTRADICTION"
-        ):
-
-            best_reason = (
-                "The claim was not "
-                "semantically entailed "
-                "by the permitted evidence."
-            )
-
-        verified_claims.append(
-            {
-                "claim": claim,
-                "supported": claim_supported,
-                "score": best_score,
-                "label": best_label,
-                "semantic_score": best_score,
-                "reason": best_reason,
-                "evidence": best_evidence,
-            }
-        )
+        verified_claims.append({
+            "claim": claim,
+            "supported": supported,
+            "score": r.score,
+            "label": r.label,
+            "semantic_score": r.score,
+            "reason": reason,
+            "evidence": premise,
+        })
 
         print(
-            "\nFinal claim decision:"
+            f"Final: supported={supported} "
+            f"label={r.label} score={r.score:.4f}"
         )
-
-        print(
-            f"Supported: {claim_supported}"
-        )
-
-        print(
-            f"Semantic label: {best_label}"
-        )
-
-        print(
-            f"Semantic score: "
-            f"{best_score:.4f}"
-        )
-
-        print(
-            f"Reason: {best_reason}"
-        )
-
-    # =====================================================
-    # FINAL VERIFICATION RESULT
-    # =====================================================
 
     unsupported = [
-        item
-        for item in verified_claims
-        if not item["supported"]
+        c for c in verified_claims
+        if not c["supported"]
     ]
 
     if unsupported:
-
         failed = "; ".join(
-            item["claim"]
-            for item in unsupported
+            c["claim"]
+            for c in unsupported
         )
-
         return {
             "supported": False,
-            "reason": (
-                f"Unsupported claim(s): {failed}"
-            ),
+            "reason": f"Unsupported claim(s): {failed}",
             "claims": verified_claims,
         }
 
     return {
         "supported": True,
-        "reason": (
-            "All generated claims were "
-            "semantically entailed by "
-            "permitted evidence."
-        ),
+        "reason": "All generated claims were semantically entailed by permitted evidence.",
         "claims": verified_claims,
     }
 
@@ -645,6 +626,12 @@ def secure_ask(
     """
 
     total_start = time.perf_counter()
+    if _DUMP_RE.search(query) and user.role.value.upper() != "ADMIN":
+        return {
+            "decision": "DENY",
+            "answer": "I cannot provide that information under the current security policy.",
+            "reason": "Bulk document extraction is restricted for this role.",
+        }
 
     # =====================================================
     # 1. RETRIEVAL
@@ -696,10 +683,11 @@ def secure_ask(
 
     rerank_start = time.perf_counter()
 
-    reranked = rerank_documents(
+    reranked = rerank_with_floor(
         query=query,
         results=candidates,
         top_k=TOP_K_RERANKED,
+        floor=2,
     )
 
     rerank_time = (
@@ -1131,7 +1119,12 @@ def secure_ask(
     print(
         "======================================="
     )
-
+    if answer.strip() == FALLBACK_ANSWER:
+        return {
+            "decision": "DENY",
+            "answer": FALLBACK_ANSWER,
+            "reason": "No supporting information found in the permitted evidence.",
+        }
     # =====================================================
     # 8. SEMANTIC VERIFICATION
     # =====================================================
@@ -1302,32 +1295,42 @@ def secure_ask(
     )
 
     print(
-        "============================================"
+    "=============================================="
+)
+
+    final_decision = disclosure.decision
+    final_reason = "; ".join(
+        disclosure.reasons
     )
 
+    if (
+            final_decision == "LIMITED"
+            and "[REDACTED]" not in answer
+    ):
+            final_decision = "ALLOW"
+            final_reason = ""
+
     return {
-        "decision": disclosure.decision,
-        "answer": answer,
-        "reason": "; ".join(
-            disclosure.reasons
-        ),
-        "risk_level": disclosure.risk_level,
-        "risk_score": disclosure.risk_score,
-        "evidence_score": 1.0,
-        "relevance_score": relevance["score"],
-        "sources": get_sources(
-            reranked
-        ),
-        "timings": {
-            "retrieval": retrieval_time,
-            "reranking": rerank_time,
-            "evidence_relevance": relevance_time,
-            "disclosure": disclosure_time,
-            "llm_generation": generation_time,
-            "nli_verification": verification_time,
-            "total": total_time,
-        },
-    }
+            "decision": final_decision,
+            "answer": answer,
+            "reason": final_reason,
+            "risk_level": disclosure.risk_level,
+            "risk_score": disclosure.risk_score,
+            "evidence_score": 1.0,
+            "relevance_score": relevance["score"],
+            "sources": get_sources(
+                reranked
+            ),
+            "timings": {
+                "retrieval": retrieval_time,
+                "reranking": rerank_time,
+                "evidence_relevance": relevance_time,
+                "disclosure": disclosure_time,
+                "llm_generation": generation_time,
+                "nli_verification": verification_time,
+                "total": total_time,
+            },
+        }
 
 
 # =========================================================

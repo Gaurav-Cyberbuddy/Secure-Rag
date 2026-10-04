@@ -291,6 +291,40 @@ def rerank_documents(
     return reranked[:top_k]
 
 
+def rerank_with_floor(
+    query: str,
+    results: List[Tuple[Document, float]],
+    top_k: int = DEFAULT_TOP_K,
+    floor: int = 2,
+) -> List[Tuple[Document, float]]:
+    """
+    Cross-encoder/lexical order, but the first-stage top-`floor`
+    results are never dropped.
+    """
+    reranked = list(
+        rerank_documents(
+            query=query,
+            results=results,
+            top_k=top_k,
+        )
+    )
+
+    def key(doc):
+        return (
+            doc.metadata.get("filename"),
+            doc.metadata.get("chunk_id"),
+        )
+
+    present = {key(d) for d, _ in reranked}
+
+    for doc, score in results[:floor]:
+        if key(doc) not in present:
+            reranked.append((doc, score))
+            present.add(key(doc))
+
+    return reranked
+
+
 # =========================================================
 # TEST
 # =========================================================
