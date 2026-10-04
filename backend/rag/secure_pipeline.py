@@ -108,8 +108,9 @@ from backend.security.verification_evidence import (
 # CONFIGURATION
 # =========================================================
 
-TOP_K_RETRIEVAL = 20
+TOP_K_RETRIEVAL = 10
 TOP_K_RERANKED = 5
+RERANK_FLOOR = 0
 
 EVIDENCE_THRESHOLD = 0.70
 
@@ -687,7 +688,7 @@ def secure_ask(
         query=query,
         results=candidates,
         top_k=TOP_K_RERANKED,
-        floor=2,
+        floor=RERANK_FLOOR,
     )
 
     rerank_time = (

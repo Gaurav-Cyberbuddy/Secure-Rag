@@ -41,6 +41,7 @@ FALLBACK_ANSWER = (
 MIN_EVIDENCE_OVERLAP = 0.35
 
 MAX_FULL_CONTEXT_CHARS = 6000
+SEMANTIC_FOCUS_WEIGHT = 0.0
 
 
 # =========================================================
