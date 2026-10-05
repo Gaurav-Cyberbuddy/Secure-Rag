@@ -10,6 +10,7 @@ RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 # Number of candidates expected from retrieval
 DEFAULT_TOP_K = 5
+FIRST_STAGE_WEIGHT = 0.0
 
 
 # =========================================================
@@ -231,12 +232,10 @@ def rerank_documents(
     # Combine relevance signals
     # -----------------------------------------------------
 
-    for (
-        (document, original_score),
-        semantic_score,
-    ) in zip(
-        results,
-        semantic_scores,
+    n = len(results)
+
+    for position, ((document, original_score), semantic_score) in enumerate(
+        zip(results, semantic_scores)
     ):
 
         semantic_score = float(
@@ -267,9 +266,12 @@ def rerank_documents(
         # it contains a few matching words.
         # -------------------------------------------------
 
+        first_stage = 1.0 - position / max(n - 1, 1)
+
         final_score = (
-            0.80 * semantic_probability
-            + 0.20 * lexical_score
+            (1.0 - FIRST_STAGE_WEIGHT)
+            * (0.80 * semantic_probability + 0.20 * lexical_score)
+            + FIRST_STAGE_WEIGHT * first_stage
         )
 
         reranked.append(
