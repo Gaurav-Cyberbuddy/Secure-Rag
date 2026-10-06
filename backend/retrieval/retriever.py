@@ -22,22 +22,12 @@ def retrieve_documents(
     Retrieve relevant document chunks and combine neighboring
     chunks from the same document.
 
-    Combining neighboring chunks prevents important information
-    from being separated during reranking.
+    Uses the original query plus a lightweight future-scope
+    query expansion when the question contains future/expansion
+    terminology.
 
-    Example:
-
-        Chunk 12:
-            The software used includes:
-
-        Chunk 13:
-            PyTorch, Python, Visual Studio Code...
-
-    becomes:
-
-        Chunk 12 + Chunk 13:
-            The software used includes:
-            PyTorch, Python, Visual Studio Code...
+    The expanded retrieval only improves candidate recall.
+    Existing reranking and security verification remain unchanged.
 
     If filename is provided, only that document is searched.
     """
@@ -47,7 +37,7 @@ def retrieve_documents(
     )
 
     # =====================================================
-    # 1. SEMANTIC RETRIEVAL
+    # 1. ORIGINAL SEMANTIC RETRIEVAL
     # =====================================================
 
     if filename:
@@ -67,11 +57,125 @@ def retrieve_documents(
             k=top_k,
         )
 
+    # =====================================================
+    # 2. FUTURE-SCOPE QUERY EXPANSION
+    # =====================================================
+
+    expanded_query = query
+
+    future_terms = (
+        "future",
+        "expand",
+        "expansion",
+        "features",
+    )
+
+    if any(
+        term in query.lower()
+        for term in future_terms
+    ):
+        expanded_query = (
+            f"{query} "
+            "future scope "
+            "future improvements "
+            "future recommendations "
+            "future requirements "
+            "framework expansion"
+        )
+
+    elif any(
+        term in query.lower()
+        for term in ("schedule", "timeline", "project plan")
+    ):
+        expanded_query = (
+            f"{query} "
+            "project schedule "
+            "project plan "
+            "timeline "
+            "Phase 1 "
+            "Phase 2 "
+            "Phase 3 "
+            "Requirements gathering "
+            "Design and prototyping "
+            "Development "
+            "Testing release"
+        )
+
+    # =====================================================
+    # 3. EXPANDED SEMANTIC RETRIEVAL
+    # =====================================================
+
+    if expanded_query != query:
+
+        if filename:
+
+            expanded_results = (
+                vector_store.similarity_search_with_score(
+                    expanded_query,
+                    k=top_k,
+                    filter={
+                        "filename": filename
+                    },
+                )
+            )
+
+        else:
+
+            expanded_results = (
+                vector_store.similarity_search_with_score(
+                    expanded_query,
+                    k=top_k,
+                )
+            )
+
+    else:
+
+        expanded_results = []
+
+    # =====================================================
+    # 4. MERGE ORIGINAL + EXPANDED RESULTS
+    # =====================================================
+
+    merged_results = []
+
+    seen = set()
+
+    for document, score in (
+        results + expanded_results
+    ):
+
+        source = document.metadata.get(
+            "filename"
+        )
+
+        chunk_id = document.metadata.get(
+            "chunk_id"
+        )
+
+        key = (
+            source,
+            str(chunk_id),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        merged_results.append(
+            (
+                document,
+                score,
+            )
+        )
+
+    results = merged_results
+
     if not results:
         return []
 
     # =====================================================
-    # 2. FIND DOCUMENTS CONTAINING MATCHING CHUNKS
+    # 5. FIND DOCUMENTS CONTAINING MATCHING CHUNKS
     # =====================================================
 
     document_names = set()
@@ -86,7 +190,7 @@ def retrieve_documents(
             document_names.add(source)
 
     # =====================================================
-    # 3. LOAD ALL CHUNKS FROM THE RELEVANT DOCUMENTS
+    # 6. LOAD ALL CHUNKS FROM RELEVANT DOCUMENTS
     # =====================================================
 
     chunk_lookup = {}
@@ -152,7 +256,7 @@ def retrieve_documents(
             ] = document
 
     # =====================================================
-    # 4. COMBINE NEIGHBORING CHUNKS
+    # 7. COMBINE NEIGHBORING CHUNKS
     # =====================================================
 
     expanded_results = []

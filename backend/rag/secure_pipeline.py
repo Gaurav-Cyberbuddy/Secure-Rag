@@ -395,7 +395,7 @@ def verify_claim(claim: str, focused: list[str], broad: list[str], checker):
         if _is_entailed(r):
             return True, r, premise
 
-        # Strong contradiction rejects.
+           # Strong contradiction rejects.
         if (
             r.label == "CONTRADICTION"
             and r.score >= EVIDENCE_THRESHOLD
@@ -421,7 +421,11 @@ def decompose_claim(claim: str) -> list[str]:
 
     parts = [
         p.strip()
-        for p in re.split(r";\s+|,\s+(?:and\s+)?", text)
+        for p in re.split(
+            r";\s+|,\s+(?=(?:the ability|the development|and the development|and they achieved|ensuring that))",
+            text,
+            flags=re.IGNORECASE,
+        )
         if p.strip()
     ]
 

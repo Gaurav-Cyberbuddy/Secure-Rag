@@ -210,6 +210,39 @@ def focus_context_for_question(
             ):
                 selected_indexes.add(index + 1)
 
+        if SEMANTIC_RECALL_BLOCKS > 0:
+                from backend.security.evidence_relevance import get_model
+
+        remaining = [
+            i for i in range(len(blocks))
+            if i not in selected_indexes
+        ]
+
+        if remaining:
+            model = get_model()
+
+            q = model.encode(
+                query,
+                normalize_embeddings=True,
+            )
+
+            b = model.encode(
+                [blocks[i] for i in remaining],
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=False,
+            )
+
+            sims = b @ q
+
+            best = sorted(
+                zip(sims, remaining),
+                reverse=True,
+            )[:SEMANTIC_RECALL_BLOCKS]
+
+            for _, i in best:
+                selected_indexes.add(i)
+
     ordered = [blocks[i] for i in sorted(selected_indexes)]
 
     # Remove duplicate blocks.

@@ -221,6 +221,16 @@ def _is_bare_list_item(line: str) -> bool:
 
     if not text or _is_separator(text):
         return False
+            # ---------------------------------------------------------
+    # Project phase schedules are structured list items.
+    # Keep all phases together for semantic verification.
+    # ---------------------------------------------------------
+
+    if re.match(
+        r"(?i)^phase\s+\d+\s*[-–—:]",
+        text,
+    ):
+        return True
 
     # ---------------------------------------------------------
     # Explicit bullets are always list items.
@@ -832,7 +842,7 @@ def split_evidence_chunks(
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
 
-def select_sentence_windows(claim: str, evidence: str, top_n: int = 2) -> list[str]:
+def select_sentence_windows(claim: str, evidence: str, top_n: int = 4) -> list[str]:
     """Short 1-2 sentence premises. Used only to LOCATE evidence for NLI."""
     text = normalize_document_text(evidence.replace("--- EVIDENCE ---", " "))
     sentences = [s.strip() for s in _SENT_SPLIT_RE.split(" ".join(text.split()))
